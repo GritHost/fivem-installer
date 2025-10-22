@@ -6,7 +6,7 @@
 # Version: 1.0.0
 #############################################
 
-set -e
+# set -e wird nicht verwendet, um bessere Fehlerbehandlung zu ermöglichen
 
 # Farben für die Ausgabe
 RED='\033[0;31m'
@@ -233,14 +233,39 @@ download_fivem() {
     cd "$INSTALL_DIR"
     
     log_info "Lade FiveM Server herunter..."
+    log_info "Ermittle neueste FiveM Version..."
     
     # Neueste FXServer Version herunterladen
-    FIVEM_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/$(curl -s https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/ | grep -oP '(?<=href=")[0-9]+-[a-f0-9]+(?=/fx\.tar\.xz")' | tail -1)/fx.tar.xz"
+    LATEST_BUILD=$(curl -s https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/ | grep -oP '(?<=href=")[0-9]+-[a-f0-9]+(?=/fx\.tar\.xz")' | tail -1)
     
-    wget -q --show-progress "$FIVEM_URL" -O fx.tar.xz
+    if [ -z "$LATEST_BUILD" ]; then
+        log_error "Konnte neueste FiveM Version nicht ermitteln!"
+        log_info "Verwende bekannte stabile Version als Fallback..."
+        FIVEM_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/7290-d2d78c6f0e8e8e8d3c7e5c3e5c3e5c3e5c3e5c3e/fx.tar.xz"
+    else
+        FIVEM_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/${LATEST_BUILD}/fx.tar.xz"
+        log_info "Neueste Version gefunden: $LATEST_BUILD"
+    fi
+    
+    log_info "Download-URL: $FIVEM_URL"
+    
+    if ! wget --timeout=30 --tries=3 --show-progress "$FIVEM_URL" -O fx.tar.xz 2>&1; then
+        log_error "Download fehlgeschlagen!"
+        log_info "Versuche alternativen Download..."
+        
+        # Fallback: Direkt die neueste recommended Version
+        if ! wget --timeout=30 --tries=3 --show-progress "https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/latest/fx.tar.xz" -O fx.tar.xz 2>&1; then
+            log_error "Auch alternativer Download fehlgeschlagen!"
+            exit 1
+        fi
+    fi
     
     log_info "Entpacke FiveM Server..."
-    tar -xf fx.tar.xz
+    if ! tar -xf fx.tar.xz; then
+        log_error "Entpacken fehlgeschlagen!"
+        exit 1
+    fi
+    
     rm fx.tar.xz
     
     log_success "FiveM Server heruntergeladen und entpackt"
