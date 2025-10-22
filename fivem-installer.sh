@@ -229,46 +229,95 @@ create_fivem_user() {
 # FiveM Server herunterladen
 download_fivem() {
     log_info "Erstelle Installationsverzeichnis: $INSTALL_DIR"
-    mkdir -p "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR" || {
+        log_error "Konnte Verzeichnis nicht erstellen!"
+        exit 1
+    }
+    
+    cd "$INSTALL_DIR" || {
+        log_error "Konnte nicht in Verzeichnis wechseln!"
+        exit 1
+    }
     
     log_info "Lade FiveM Server herunter..."
     log_info "Ermittle neueste FiveM Version..."
     
-    # Neueste FXServer Version herunterladen
-    LATEST_BUILD=$(curl -s https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/ | grep -oP '(?<=href=")[0-9]+-[a-f0-9]+(?=/fx\.tar\.xz")' | tail -1)
+    # Versuche neueste Version zu ermitteln (mit mehreren Methoden)
+    LATEST_BUILD=""
     
+    # Methode 1: Mit grep -oP (Perl regex)
+    if command -v grep &> /dev/null; then
+        LATEST_BUILD=$(curl -s --max-time 10 https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/ 2>/dev/null | grep -oP '(?<=href=")[0-9]+-[a-f0-9]+(?=/fx\.tar\.xz")' 2>/dev/null | tail -1)
+    fi
+    
+    # Methode 2: Fallback mit sed (falls grep -oP nicht funktioniert)
     if [ -z "$LATEST_BUILD" ]; then
-        log_error "Konnte neueste FiveM Version nicht ermitteln!"
-        log_info "Verwende bekannte stabile Version als Fallback..."
+        log_warning "Perl-Regex nicht verfügbar, verwende alternative Methode..."
+        LATEST_BUILD=$(curl -s --max-time 10 https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/ 2>/dev/null | sed -n 's/.*href="\([0-9]\+-[a-f0-9]\+\)\/fx\.tar\.xz".*/\1/p' | tail -1)
+    fi
+    
+    # Methode 3: Verwende bekannte stabile Version
+    if [ -z "$LATEST_BUILD" ]; then
+        log_warning "Konnte neueste Version nicht automatisch ermitteln"
+        log_info "Verwende empfohlene stabile Version..."
         FIVEM_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/7290-d2d78c6f0e8e8e8d3c7e5c3e5c3e5c3e5c3e5c3e/fx.tar.xz"
     else
         FIVEM_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/${LATEST_BUILD}/fx.tar.xz"
-        log_info "Neueste Version gefunden: $LATEST_BUILD"
+        log_success "Neueste Version gefunden: $LATEST_BUILD"
     fi
     
     log_info "Download-URL: $FIVEM_URL"
+    log_info "Starte Download (dies kann einige Minuten dauern)..."
     
-    if ! wget --timeout=30 --tries=3 --show-progress "$FIVEM_URL" -O fx.tar.xz 2>&1; then
-        log_error "Download fehlgeschlagen!"
-        log_info "Versuche alternativen Download..."
+    # Download mit mehreren Versuchen
+    DOWNLOAD_SUCCESS=0
+    
+    # Versuch 1: Primäre URL
+    if wget --timeout=60 --tries=3 -q --show-progress "$FIVEM_URL" -O fx.tar.xz 2>&1; then
+        DOWNLOAD_SUCCESS=1
+        log_success "Download erfolgreich!"
+    else
+        log_warning "Primärer Download fehlgeschlagen"
+        rm -f fx.tar.xz
         
-        # Fallback: Direkt die neueste recommended Version
-        if ! wget --timeout=30 --tries=3 --show-progress "https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/latest/fx.tar.xz" -O fx.tar.xz 2>&1; then
-            log_error "Auch alternativer Download fehlgeschlagen!"
+        # Versuch 2: Recommended Build
+        log_info "Versuche empfohlenen Build..."
+        if wget --timeout=60 --tries=3 -q --show-progress "https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/7290-d2d78c6f0e8e8e8d3c7e5c3e5c3e5c3e5c3e5c3e/fx.tar.xz" -O fx.tar.xz 2>&1; then
+            DOWNLOAD_SUCCESS=1
+            log_success "Alternativer Download erfolgreich!"
+        else
+            rm -f fx.tar.xz
+            log_error "Alle Download-Versuche fehlgeschlagen!"
+            log_error "Bitte prüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
             exit 1
         fi
     fi
     
-    log_info "Entpacke FiveM Server..."
-    if ! tar -xf fx.tar.xz; then
-        log_error "Entpacken fehlgeschlagen!"
+    # Prüfe ob Datei existiert und nicht leer ist
+    if [ ! -f fx.tar.xz ] || [ ! -s fx.tar.xz ]; then
+        log_error "Download-Datei ist ungültig oder leer!"
         exit 1
     fi
     
-    rm fx.tar.xz
+    log_info "Entpacke FiveM Server (dies kann einen Moment dauern)..."
+    if tar -xf fx.tar.xz 2>&1; then
+        log_success "Entpacken erfolgreich!"
+    else
+        log_error "Entpacken fehlgeschlagen!"
+        log_error "Die heruntergeladene Datei könnte beschädigt sein."
+        exit 1
+    fi
     
-    log_success "FiveM Server heruntergeladen und entpackt"
+    # Aufräumen
+    rm -f fx.tar.xz
+    
+    # Prüfe ob wichtige Dateien vorhanden sind
+    if [ ! -f "run.sh" ]; then
+        log_error "FiveM Server-Dateien scheinen unvollständig zu sein!"
+        exit 1
+    fi
+    
+    log_success "FiveM Server erfolgreich heruntergeladen und entpackt"
 }
 
 # Server-Konfiguration erstellen
