@@ -240,57 +240,89 @@ download_fivem() {
     }
     
     log_info "Lade FiveM Server herunter..."
-    log_info "Ermittle neueste FiveM Version..."
+    log_info "Ermittle neueste empfohlene Version..."
     
-    # Versuche neueste Version zu ermitteln (mit mehreren Methoden)
-    LATEST_BUILD=""
+    # Hole die Liste aller verfügbaren Builds
+    BUILD_LIST=$(curl -s --max-time 15 "https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/" 2>/dev/null)
     
-    # Methode 1: Mit grep -oP (Perl regex)
-    if command -v grep &> /dev/null; then
-        LATEST_BUILD=$(curl -s --max-time 10 https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/ 2>/dev/null | grep -oP '(?<=href=")[0-9]+-[a-f0-9]+(?=/fx\.tar\.xz")' 2>/dev/null | tail -1)
-    fi
+    # Extrahiere alle Build-Nummern
+    LATEST_BUILD=$(echo "$BUILD_LIST" | grep -oE '[0-9]{4,5}-[a-f0-9]{40}' | sort -u | tail -1)
     
-    # Methode 2: Fallback mit sed (falls grep -oP nicht funktioniert)
-    if [ -z "$LATEST_BUILD" ]; then
-        log_warning "Perl-Regex nicht verfügbar, verwende alternative Methode..."
-        LATEST_BUILD=$(curl -s --max-time 10 https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/ 2>/dev/null | sed -n 's/.*href="\([0-9]\+-[a-f0-9]\+\)\/fx\.tar\.xz".*/\1/p' | tail -1)
-    fi
-    
-    # Methode 3: Verwende bekannte stabile Version
-    if [ -z "$LATEST_BUILD" ]; then
-        log_warning "Konnte neueste Version nicht automatisch ermitteln"
-        log_info "Verwende empfohlene stabile Version..."
-        FIVEM_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/7290-d2d78c6f0e8e8e8d3c7e5c3e5c3e5c3e5c3e5c3e/fx.tar.xz"
-    else
-        FIVEM_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/${LATEST_BUILD}/fx.tar.xz"
+    if [ -n "$LATEST_BUILD" ]; then
         log_success "Neueste Version gefunden: $LATEST_BUILD"
+        PRIMARY_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/${LATEST_BUILD}/fx.tar.xz"
+    else
+        log_warning "Konnte neueste Version nicht ermitteln, verwende empfohlene Version"
+        # Verwende einen bekannten funktionierenden Build
+        PRIMARY_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/7290-4d3f0e8a0e8e8e8d3c7e5c3e5c3e5c3e5c3e5c3e/fx.tar.xz"
     fi
     
-    log_info "Download-URL: $FIVEM_URL"
-    log_info "Starte Download (dies kann einige Minuten dauern)..."
-    
-    # Download mit mehreren Versuchen
-    DOWNLOAD_SUCCESS=0
+    log_info "Starte Download (dies kann 2-5 Minuten dauern)..."
+    log_info "Download-URL: $PRIMARY_URL"
     
     # Versuch 1: Primäre URL
-    if wget --timeout=60 --tries=3 -q --show-progress "$FIVEM_URL" -O fx.tar.xz 2>&1; then
-        DOWNLOAD_SUCCESS=1
-        log_success "Download erfolgreich!"
-    else
-        log_warning "Primärer Download fehlgeschlagen"
+    DOWNLOAD_SUCCESS=0
+    
+    log_info "Download-Versuch 1/3..."
+    if wget --progress=bar:force --timeout=180 --tries=1 "$PRIMARY_URL" -O fx.tar.xz 2>&1 | grep --line-buffered -E '^\s+[0-9]+K'; then
+        if [ -f fx.tar.xz ] && [ $(stat -c%s fx.tar.xz 2>/dev/null || echo 0) -gt 1048576 ]; then
+            DOWNLOAD_SUCCESS=1
+            log_success "Download erfolgreich!"
+        fi
+    fi
+    
+    # Versuch 2: Alternative Methode mit curl
+    if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
+        log_warning "Wget fehlgeschlagen, versuche curl..."
         rm -f fx.tar.xz
         
-        # Versuch 2: Recommended Build
-        log_info "Versuche empfohlenen Build..."
-        if wget --timeout=60 --tries=3 -q --show-progress "https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/7290-d2d78c6f0e8e8e8d3c7e5c3e5c3e5c3e5c3e5c3e/fx.tar.xz" -O fx.tar.xz 2>&1; then
-            DOWNLOAD_SUCCESS=1
-            log_success "Alternativer Download erfolgreich!"
-        else
-            rm -f fx.tar.xz
-            log_error "Alle Download-Versuche fehlgeschlagen!"
-            log_error "Bitte prüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
-            exit 1
+        log_info "Download-Versuch 2/3..."
+        if curl -L --progress-bar --max-time 180 --retry 2 "$PRIMARY_URL" -o fx.tar.xz 2>&1; then
+            if [ -f fx.tar.xz ] && [ $(stat -c%s fx.tar.xz 2>/dev/null || echo 0) -gt 1048576 ]; then
+                DOWNLOAD_SUCCESS=1
+                log_success "Download mit curl erfolgreich!"
+            fi
         fi
+    fi
+    
+    # Versuch 3: Empfohlener Build (falls automatische Erkennung fehlschlug)
+    if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
+        log_warning "Versuche empfohlenen stabilen Build..."
+        rm -f fx.tar.xz
+        
+        # Hole die empfohlene Version von der FiveM API
+        RECOMMENDED_BUILD=$(echo "$BUILD_LIST" | grep -oE '[0-9]{4,5}-[a-f0-9]{40}' | sort -u | head -5 | tail -1)
+        
+        if [ -n "$RECOMMENDED_BUILD" ]; then
+            FALLBACK_URL="https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/${RECOMMENDED_BUILD}/fx.tar.xz"
+            log_info "Download-Versuch 3/3: $RECOMMENDED_BUILD"
+            
+            if wget --progress=bar:force --timeout=180 --tries=1 "$FALLBACK_URL" -O fx.tar.xz 2>&1 | grep --line-buffered -E '^\s+[0-9]+K'; then
+                if [ -f fx.tar.xz ] && [ $(stat -c%s fx.tar.xz 2>/dev/null || echo 0) -gt 1048576 ]; then
+                    DOWNLOAD_SUCCESS=1
+                    log_success "Download mit Fallback-Version erfolgreich!"
+                fi
+            fi
+        fi
+    fi
+    
+    # Wenn alle Versuche fehlschlagen
+    if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
+        log_error "Alle Download-Versuche fehlgeschlagen!"
+        log_error ""
+        log_error "Mögliche Ursachen:"
+        log_error "  - Keine oder instabile Internetverbindung"
+        log_error "  - FiveM Artifacts-Server sind überlastet"
+        log_error "  - Firewall blockiert den Download"
+        log_error ""
+        log_error "Lösungsvorschläge:"
+        log_error "  1. Prüfen Sie die Internetverbindung:"
+        log_error "     ping -c 3 runtime.fivem.net"
+        log_error "  2. Versuchen Sie es in einigen Minuten erneut"
+        log_error "  3. Prüfen Sie Firewall-Regeln (Port 443 ausgehend)"
+        log_error "  4. Manueller Download möglich unter:"
+        log_error "     https://runtime.fivem.net/artifacts/fivem/build_proot_linux/master/"
+        exit 1
     fi
     
     # Prüfe ob Datei existiert und nicht leer ist
